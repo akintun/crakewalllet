@@ -15,6 +15,7 @@ import * as Viem from "viem";
 import * as Wagmi from "wagmi";
 import { useAppKit } from "@reown/appkit/react";
 
+
 // A small integrations component that references several project dependencies.
 export default function Integrations() {
   const { open } = useAppKit();
