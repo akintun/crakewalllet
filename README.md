@@ -1,6 +1,5 @@
 
 **CrakeWallet: A Modern and Secure Cryptocurrency Wallet**
-
 InvestreWallet is a contemporary and secure cryptocurrency wallet application engineered with the latest web technologies, including React 19, TypeScript, and Vite. It offers a seamless and secure gateway to the world of decentralized applications (dApps) and blockchain networks through its integration with Reown, the evolution of WalletConnect.
 
 ### **Core Features**
