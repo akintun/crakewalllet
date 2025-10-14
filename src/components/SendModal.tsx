@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { ethers } from "ethers";
+import AddressBookModal from "./AddressBook";
+import GasFeeEstimator from "./GasFeeEstimator";
 import type { SendModalProps, TransactionData } from "../types";
 
 export default function SendModal({ 
@@ -7,13 +9,17 @@ export default function SendModal({
   onClose, 
   onSend, 
   balance, 
-  isLoading 
+  isLoading,
+  provider 
 }: SendModalProps) {
   const [formData, setFormData] = useState<TransactionData>({
     to: "",
     amount: "",
   });
   const [errors, setErrors] = useState<Partial<TransactionData>>({});
+  const [showAddressBook, setShowAddressBook] = useState(false);
+  const [gasLimit, setGasLimit] = useState("");
+  const [gasPrice, setGasPrice] = useState("");
 
   // Validate Ethereum address
   const isValidAddress = (address: string): boolean => {
@@ -91,6 +97,18 @@ export default function SendModal({
     handleInputChange("amount", maxAmount.toString());
   };
 
+  // Handle address selection from address book
+  const handleSelectAddress = (address: string) => {
+    handleInputChange("to", address);
+    setShowAddressBook(false);
+  };
+
+  // Handle gas fee updates
+  const handleGasUpdate = (newGasLimit: string, newGasPrice: string) => {
+    setGasLimit(newGasLimit);
+    setGasPrice(newGasPrice);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -104,15 +122,26 @@ export default function SendModal({
         <form onSubmit={handleSubmit} className="send-form">
           <div className="form-group">
             <label htmlFor="recipient">Recipient Address</label>
-            <input
-              id="recipient"
-              type="text"
-              placeholder="0x..."
-              value={formData.to}
-              onChange={(e) => handleInputChange("to", e.target.value)}
-              className={errors.to ? "error" : ""}
-              disabled={isLoading}
-            />
+            <div className="address-input-group">
+              <input
+                id="recipient"
+                type="text"
+                placeholder="0x..."
+                value={formData.to}
+                onChange={(e) => handleInputChange("to", e.target.value)}
+                className={errors.to ? "error" : ""}
+                disabled={isLoading}
+              />
+              <button
+                type="button"
+                className="address-book-button"
+                onClick={() => setShowAddressBook(true)}
+                disabled={isLoading}
+                title="Select from address book"
+              >
+                📇
+              </button>
+            </div>
             {errors.to && <div className="error-message">{errors.to}</div>}
           </div>
 
@@ -143,6 +172,15 @@ export default function SendModal({
             <div className="balance-info">Available: {balance} ETH</div>
           </div>
 
+          {formData.to && formData.amount && provider && (
+            <GasFeeEstimator
+              provider={provider}
+              to={formData.to}
+              value={formData.amount}
+              onGasUpdate={handleGasUpdate}
+            />
+          )}
+
           <div className="form-actions">
             <button
               type="button"
@@ -162,6 +200,14 @@ export default function SendModal({
           </div>
         </form>
       </div>
+      
+      {showAddressBook && (
+        <AddressBookModal
+          isOpen={showAddressBook}
+          onClose={() => setShowAddressBook(false)}
+          onSelectAddress={handleSelectAddress}
+        />
+      )}
     </div>
   );
 }

@@ -1,12 +1,18 @@
 import { useState, useEffect } from "react";
+import { ethers } from "ethers";
 import { appKit } from "./config";
 import { useAppKit, useAppKitState } from "@reown/appkit/react";
 import "./App.css";
 import Integrations from "./integrations/Integrations";
 import SendModal from "./components/SendModal";
 import ReceiveModal from "./components/ReceiveModal";
+import TransactionHistoryModal from "./components/TransactionHistory";
+import TokenList from "./components/TokenList";
+import NetworkSwitcher from "./components/NetworkSwitcher";
+import PortfolioStats from "./components/PortfolioStats";
 import { getEthBalance, sendTransaction } from "./utils/balance";
-import type { WalletState, ErrorState, LoadingState, TransactionData } from "./types";
+import { getTransactionHistory, saveTransaction, monitorPendingTransactions } from "./utils/transactionHistory";
+import type { WalletState, ErrorState, LoadingState, TransactionData, TransactionHistory } from "./types";
 
 function App() {
   const { open } = useAppKit();
@@ -25,13 +31,21 @@ function App() {
     connecting: false,
     fetchingBalance: false,
     sendingTransaction: false,
+    fetchingHistory: false,
+    fetchingTokens: false,
   });
   
   const [error, setError] = useState<ErrorState | null>(null);
+  const [provider, setProvider] = useState<ethers.Provider | null>(null);
   
   // Modal states
   const [showSendModal, setShowSendModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  
+  // Transaction history state
+  const [transactionHistory, setTransactionHistory] = useState<TransactionHistory[]>([]);
+  const [tokens, setTokens] = useState<Array<{ symbol: string; balance: string; address: string }>>([]);
 
   const isConnected = !!appKitState.activeChain;
   const address = isConnected ? appKit.getAddress() : "";
@@ -44,6 +58,26 @@ function App() {
     }
   }, [error]);
 
+  // Initialize provider when connected
+  useEffect(() => {
+    const initializeProvider = async () => {
+      if (isConnected) {
+        try {
+          // Use a default Ethereum mainnet provider for gas estimation
+          const ethersProvider = new ethers.JsonRpcProvider('https://ethereum-rpc.publicnode.com');
+          setProvider(ethersProvider);
+        } catch (error) {
+          console.error('Failed to initialize provider:', error);
+          setProvider(null);
+        }
+      } else {
+        setProvider(null);
+      }
+    };
+
+    initializeProvider();
+  }, [isConnected]);
+
   // Update wallet state when connection changes
   useEffect(() => {
     setWalletState(prev => ({
@@ -51,7 +85,34 @@ function App() {
       isConnected,
       address: address || "",
     }));
+    
+    // Load transaction history when connected
+    if (isConnected && address) {
+      loadTransactionHistory();
+    }
   }, [isConnected, address]);
+
+  // Load transaction history
+  const loadTransactionHistory = async () => {
+    if (!address) return;
+    
+    setLoadingState(prev => ({ ...prev, fetchingHistory: true }));
+    try {
+      const history = getTransactionHistory(address);
+      setTransactionHistory(history);
+      
+      // Monitor pending transactions
+      await monitorPendingTransactions();
+      
+      // Reload history after monitoring (in case statuses changed)
+      const updatedHistory = getTransactionHistory(address);
+      setTransactionHistory(updatedHistory);
+    } catch (error) {
+      console.error('Failed to load transaction history:', error);
+    } finally {
+      setLoadingState(prev => ({ ...prev, fetchingHistory: false }));
+    }
+  };
 
   // Update balance when connected
   useEffect(() => {
@@ -146,6 +207,22 @@ function App() {
       const result = await sendTransaction(transactionData);
       console.log("Transaction sent:", result);
       
+      // Save transaction to history
+      const newTransaction: TransactionHistory = {
+        hash: result.hash,
+        from: walletState.address,
+        to: transactionData.to,
+        amount: transactionData.amount,
+        status: result.status,
+        timestamp: result.timestamp,
+        type: 'sent',
+      };
+      
+      saveTransaction(newTransaction);
+      
+      // Update local history state
+      setTransactionHistory(prev => [newTransaction, ...prev]);
+      
       // Refresh balance after transaction
       setTimeout(() => {
         if (isConnected && address) {
@@ -173,6 +250,10 @@ function App() {
       <header className="app-header">
         <h1>CrakeWallet</h1>
         <p>A modern crypto wallet application</p>
+        
+        {/* Network Switcher */}
+        <NetworkSwitcher isConnected={isConnected} />
+        
         {error && (
           <div className="error-banner">
             <strong>Error:</strong> {error.message}
@@ -213,6 +294,14 @@ function App() {
                 )}
               </p>
             </div>
+            
+            <PortfolioStats
+              address={walletState.address}
+              balance={walletState.balance}
+              provider={provider}
+              tokens={tokens}
+            />
+            
             <div className="action-buttons">
               <button
                 onClick={() => setShowSendModal(true)}
@@ -227,12 +316,26 @@ function App() {
               >
                 Receive
               </button>
+              <button
+                onClick={() => setShowHistoryModal(true)}
+                className="history-button"
+                disabled={loadingState.fetchingHistory}
+              >
+                {loadingState.fetchingHistory ? "Loading..." : "History"}
+              </button>
               <button onClick={handleDisconnect} className="disconnect-button">
                 Disconnect
               </button>
             </div>
           </div>
         )}
+        
+        {/* Token List */}
+        <TokenList 
+          walletAddress={walletState.address}
+          isConnected={isConnected}
+        />
+        
         <Integrations />
       </main>
 
@@ -243,12 +346,20 @@ function App() {
         onSend={handleSendTransaction}
         balance={walletState.balance}
         isLoading={loadingState.sendingTransaction}
+        provider={provider}
       />
       
       <ReceiveModal
         isOpen={showReceiveModal}
         onClose={() => setShowReceiveModal(false)}
         address={walletState.address}
+      />
+      
+      <TransactionHistoryModal
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        transactions={transactionHistory}
+        isLoading={loadingState.fetchingHistory}
       />
     </div>
   );
