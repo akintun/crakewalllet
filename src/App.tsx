@@ -3,33 +3,91 @@ import { appKit } from "./config";
 import { useAppKit, useAppKitState } from "@reown/appkit/react";
 import "./App.css";
 import Integrations from "./integrations/Integrations";
-import { getEthBalance } from "./utils/balance";
+import SendModal from "./components/SendModal";
+import ReceiveModal from "./components/ReceiveModal";
+import { getEthBalance, sendTransaction } from "./utils/balance";
+import type { WalletState, ErrorState, LoadingState, TransactionData } from "./types";
 
 function App() {
   const { open } = useAppKit();
   const appKitState = useAppKitState();
-  const [balance, setBalance] = useState<string>("");
-  const [isConnecting, setIsConnecting] = useState(false);
+  
+  // Consolidated state management
+  const [walletState, setWalletState] = useState<WalletState>({
+    isConnected: false,
+    address: "",
+    balance: "",
+    isLoading: false,
+    error: null,
+  });
+  
+  const [loadingState, setLoadingState] = useState<LoadingState>({
+    connecting: false,
+    fetchingBalance: false,
+    sendingTransaction: false,
+  });
+  
+  const [error, setError] = useState<ErrorState | null>(null);
+  
+  // Modal states
+  const [showSendModal, setShowSendModal] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
 
   const isConnected = !!appKitState.activeChain;
   const address = isConnected ? appKit.getAddress() : "";
 
+  // Clear error after 5 seconds
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
+  // Update wallet state when connection changes
+  useEffect(() => {
+    setWalletState(prev => ({
+      ...prev,
+      isConnected,
+      address: address || "",
+    }));
+  }, [isConnected, address]);
+
   // Update balance when connected
   useEffect(() => {
     let mounted = true;
+    
     async function fetchBalance() {
       if (isConnected && address) {
+        setLoadingState(prev => ({ ...prev, fetchingBalance: true }));
+        setError(null);
+        
         try {
           const b = await getEthBalance(address);
-          if (mounted) setBalance(b);
+          if (mounted) {
+            setWalletState(prev => ({ ...prev, balance: b, error: null }));
+          }
         } catch (e) {
           console.warn("Balance fetch failed", e);
-          if (mounted) setBalance("0.0");
+          if (mounted) {
+            const errorMsg = e instanceof Error ? e.message : "Failed to fetch balance";
+            setError({
+              message: errorMsg,
+              type: "balance",
+              details: "Unable to retrieve wallet balance. Please try again.",
+            });
+            setWalletState(prev => ({ ...prev, balance: "0.0" }));
+          }
+        } finally {
+          if (mounted) {
+            setLoadingState(prev => ({ ...prev, fetchingBalance: false }));
+          }
         }
       } else {
-        setBalance("");
+        setWalletState(prev => ({ ...prev, balance: "" }));
       }
     }
+    
     fetchBalance();
     return () => {
       mounted = false;
@@ -38,30 +96,89 @@ function App() {
 
   // Connect to wallet (opens modal with embedded wallet option)
   const handleConnect = async () => {
-    setIsConnecting(true);
+    setLoadingState(prev => ({ ...prev, connecting: true }));
+    setError(null);
+    
     try {
       await open();
     } catch (error) {
       console.error("Failed to connect:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to connect wallet";
+      setError({
+        message: errorMsg,
+        type: "connection",
+        details: "Please check your wallet and try again.",
+      });
     } finally {
-      setIsConnecting(false);
+      setLoadingState(prev => ({ ...prev, connecting: false }));
     }
   };
 
   // Disconnect wallet
   const handleDisconnect = async () => {
+    setError(null);
     try {
       await appKit.disconnect();
+      setWalletState({
+        isConnected: false,
+        address: "",
+        balance: "",
+        isLoading: false,
+        error: null,
+      });
     } catch (error) {
       console.error("Failed to disconnect:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to disconnect wallet";
+      setError({
+        message: errorMsg,
+        type: "connection",
+        details: "Please try again or refresh the page.",
+      });
+    }
+  };
+
+  // Handle send transaction
+  const handleSendTransaction = async (transactionData: TransactionData) => {
+    setLoadingState(prev => ({ ...prev, sendingTransaction: true }));
+    setError(null);
+
+    try {
+      const result = await sendTransaction(transactionData);
+      console.log("Transaction sent:", result);
+      
+      // Refresh balance after transaction
+      setTimeout(() => {
+        if (isConnected && address) {
+          // Trigger balance refresh by updating a dependency
+          setWalletState(prev => ({ ...prev, balance: "0.0" }));
+        }
+      }, 1000);
+      
+    } catch (error) {
+      console.error("Transaction failed:", error);
+      const errorMsg = error instanceof Error ? error.message : "Transaction failed";
+      setError({
+        message: errorMsg,
+        type: "transaction",
+        details: "Please check your transaction details and try again.",
+      });
+      throw error; // Re-throw to let modal handle it
+    } finally {
+      setLoadingState(prev => ({ ...prev, sendingTransaction: false }));
     }
   };
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>InvestreWallet</h1>
+        <h1>CrakeWallet</h1>
         <p>A modern crypto wallet application</p>
+        {error && (
+          <div className="error-banner">
+            <strong>Error:</strong> {error.message}
+            {error.details && <div className="error-details">{error.details}</div>}
+          </div>
+        )}
       </header>
 
       <main className="app-main">
@@ -74,10 +191,10 @@ function App() {
             </p>
             <button
               onClick={handleConnect}
-              disabled={isConnecting}
+              disabled={loadingState.connecting}
               className="connect-button"
             >
-              {isConnecting ? "Connecting..." : "Connect Wallet"}
+              {loadingState.connecting ? "Connecting..." : "Connect Wallet"}
             </button>
           </div>
         ) : (
@@ -85,25 +202,27 @@ function App() {
             <h2>Wallet Connected</h2>
             <div className="wallet-info">
               <p>
-                <strong>Address:</strong> {address}
+                <strong>Address:</strong> {walletState.address}
               </p>
               <p>
-                <strong>Balance:</strong> {balance} ETH
+                <strong>Balance:</strong> 
+                {loadingState.fetchingBalance ? (
+                  <span className="loading">Loading...</span>
+                ) : (
+                  `${walletState.balance} ETH`
+                )}
               </p>
             </div>
             <div className="action-buttons">
               <button
-                onClick={() => {
-                  /* TODO: Send */
-                }}
+                onClick={() => setShowSendModal(true)}
                 className="send-button"
+                disabled={loadingState.sendingTransaction || !walletState.balance || walletState.balance === "0.0"}
               >
                 Send
               </button>
               <button
-                onClick={() => {
-                  /* TODO: Receive */
-                }}
+                onClick={() => setShowReceiveModal(true)}
                 className="receive-button"
               >
                 Receive
@@ -116,6 +235,21 @@ function App() {
         )}
         <Integrations />
       </main>
+
+      {/* Modals */}
+      <SendModal
+        isOpen={showSendModal}
+        onClose={() => setShowSendModal(false)}
+        onSend={handleSendTransaction}
+        balance={walletState.balance}
+        isLoading={loadingState.sendingTransaction}
+      />
+      
+      <ReceiveModal
+        isOpen={showReceiveModal}
+        onClose={() => setShowReceiveModal(false)}
+        address={walletState.address}
+      />
     </div>
   );
 }
