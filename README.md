@@ -1,5 +1,5 @@
 
-# 🚀 CrakeWallet
+#  CrakeWallet
 
 **A Professional-Grade Cryptocurrency Wallet with Advanced Features**
 
