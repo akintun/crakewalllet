@@ -2,6 +2,8 @@ import { useState } from "react";
 import { ethers } from "ethers";
 import AddressBookModal from "./AddressBook";
 import GasFeeEstimator from "./GasFeeEstimator";
+// 1. Import the confirmation component
+import TransactionConfirmation from "./TransactionConfirmation"; 
 import type { SendModalProps, TransactionData } from "../types";
 
 export default function SendModal({ 
@@ -18,8 +20,16 @@ export default function SendModal({
   });
   const [errors, setErrors] = useState<Partial<TransactionData>>({});
   const [showAddressBook, setShowAddressBook] = useState(false);
-  const [gasLimit, setGasLimit] = useState("");
-  const [gasPrice, setGasPrice] = useState("");
+  
+  // 2. New state for confirmation modal
+  const [showConfirmation, setShowConfirmation] = useState(false); 
+  
+  // 3. Update gas state to include estimated cost for display in confirmation
+  const [gasDetails, setGasDetails] = useState({
+    gasLimit: "",
+    gasPrice: "",
+    estimatedCostETH: "", // Store ETH cost for display
+  });
 
   // Validate Ethereum address
   const isValidAddress = (address: string): boolean => {
@@ -35,7 +45,10 @@ export default function SendModal({
     try {
       const amountNum = parseFloat(amount);
       const balanceNum = parseFloat(balance);
-      return amountNum > 0 && amountNum <= balanceNum;
+      // Check for zero amount, or if amount + estimated gas > balance
+      // Note: Full gas check requires knowing the final gas cost. Using a rough 0.001 ETH buffer for now.
+      const totalEstimatedCost = parseFloat(formData.amount || "0") + parseFloat(gasDetails.estimatedCostETH || "0");
+      return amountNum > 0 && totalEstimatedCost <= balanceNum;
     } catch {
       return false;
     }
@@ -54,32 +67,57 @@ export default function SendModal({
     if (!formData.amount) {
       newErrors.amount = "Amount is required";
     } else if (!isValidAmount(formData.amount, balance)) {
-      newErrors.amount = "Invalid amount or insufficient balance";
+      newErrors.amount = "Invalid amount or insufficient balance (check gas cost)";
     }
+    
+    // Check if gas is estimated before proceeding to confirmation
+    if (!gasDetails.gasLimit || !gasDetails.gasPrice) {
+        newErrors.gas = "Gas estimation failed or is in progress.";
+    }
+
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  // Handle form submission
-  const handleSubmit = async (e: React.FormEvent) => {
+  // 4. Update handleSubmit to show confirmation instead of sending immediately
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!validateForm()) {
       return;
     }
 
+    // Pass gas details to formData before showing confirmation
+    setFormData(prev => ({ 
+        ...prev, 
+        gasLimit: gasDetails.gasLimit,
+        gasPrice: gasDetails.gasPrice,
+    }));
+    
+    setShowConfirmation(true);
+  };
+  
+  // 5. New function to handle final send from confirmation modal
+  const handleConfirmSend = async () => {
     try {
-      await onSend(formData);
-      // Reset form on successful send
+      // The onSend prop already handles the loading and error state in App.tsx
+      await onSend({
+        ...formData,
+        gasLimit: gasDetails.gasLimit,
+        gasPrice: gasDetails.gasPrice,
+      });
+      // Reset form and close both modals on successful send
       setFormData({ to: "", amount: "" });
-      setErrors({});
+      setGasDetails({ gasLimit: "", gasPrice: "", estimatedCostETH: "" });
+      setShowConfirmation(false);
       onClose();
     } catch (error) {
-      // Error handling is done in parent component
-      console.error("Send transaction failed:", error);
+      // Re-throw to let App.tsx handle the error banner display
+      console.error("Confirmation send failed:", error);
+      setShowConfirmation(false); // Close confirmation on failure
     }
-  };
+  }
 
   // Handle input changes
   const handleInputChange = (field: keyof TransactionData, value: string) => {
@@ -93,7 +131,8 @@ export default function SendModal({
   // Set max amount
   const handleMaxClick = () => {
     // Leave some ETH for gas fees (rough estimate)
-    const maxAmount = Math.max(0, parseFloat(balance) - 0.001);
+    const gasBuffer = parseFloat(gasDetails.estimatedCostETH || '0.001');
+    const maxAmount = Math.max(0, parseFloat(balance) - gasBuffer);
     handleInputChange("amount", maxAmount.toString());
   };
 
@@ -103,10 +142,13 @@ export default function SendModal({
     setShowAddressBook(false);
   };
 
-  // Handle gas fee updates
-  const handleGasUpdate = (newGasLimit: string, newGasPrice: string) => {
-    setGasLimit(newGasLimit);
-    setGasPrice(newGasPrice);
+  // 6. Update handleGasUpdate to store all gas details
+  const handleGasUpdate = (newGasLimit: string, newGasPrice: string, newEstimatedCostETH: string) => {
+    setGasDetails({
+      gasLimit: newGasLimit,
+      gasPrice: newGasPrice,
+      estimatedCostETH: newEstimatedCostETH,
+    });
   };
 
   if (!isOpen) return null;
@@ -120,6 +162,7 @@ export default function SendModal({
         </div>
         
         <form onSubmit={handleSubmit} className="send-form">
+          {/* ... Recipient Address Form Group ... */}
           <div className="form-group">
             <label htmlFor="recipient">Recipient Address</label>
             <div className="address-input-group">
@@ -145,6 +188,7 @@ export default function SendModal({
             {errors.to && <div className="error-message">{errors.to}</div>}
           </div>
 
+          {/* ... Amount Form Group ... */}
           <div className="form-group">
             <label htmlFor="amount">Amount (ETH)</label>
             <div className="amount-input-group">
@@ -177,9 +221,14 @@ export default function SendModal({
               provider={provider}
               to={formData.to}
               value={formData.amount}
-              onGasUpdate={handleGasUpdate}
+              // 7. Pass a function to handle full gas update
+              onGasUpdate={(gasLimit, gasPrice, estimatedCostETH) => 
+                handleGasUpdate(gasLimit, gasPrice, estimatedCostETH)
+              }
             />
           )}
+          {errors.gas && <div className="error-message">{errors.gas}</div>}
+
 
           <div className="form-actions">
             <button
@@ -193,9 +242,9 @@ export default function SendModal({
             <button
               type="submit"
               className="send-button"
-              disabled={isLoading || !formData.to || !formData.amount}
+              disabled={isLoading || !formData.to || !formData.amount || !gasDetails.gasLimit}
             >
-              {isLoading ? "Sending..." : "Send"}
+              {isLoading ? "Sending..." : "Review & Send"}
             </button>
           </div>
         </form>
@@ -208,6 +257,21 @@ export default function SendModal({
           onSelectAddress={handleSelectAddress}
         />
       )}
+      
+      {/* 8. Transaction Confirmation Modal */}
+      <TransactionConfirmation
+        isOpen={showConfirmation}
+        onClose={() => setShowConfirmation(false)}
+        onConfirm={handleConfirmSend}
+        transaction={{
+          to: formData.to,
+          amount: formData.amount,
+          gasLimit: gasDetails.gasLimit,
+          gasPrice: gasDetails.gasPrice,
+        }}
+        estimatedCost={gasDetails.estimatedCostETH}
+        isLoading={isLoading}
+      />
     </div>
   );
 }
